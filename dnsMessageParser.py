@@ -9,6 +9,9 @@
 from ctypes import BigEndianStructure, c_uint16, sizeof
 
 
+BYTE = 1
+
+
 class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
     """
     DNS message header object
@@ -207,7 +210,7 @@ def main():
             # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]})")
         
             print(f"questionSecsOffset: {questionSecsOffset}")
-            print(f";{domainName: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <9}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
+            print(f";{domainName: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <7}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
             print()
         
                 
@@ -226,24 +229,39 @@ def main():
                 PTR_BITMASK = 0b11000000
                 if (stdinBytes[answerSecOffset] & PTR_BITMASK) == PTR_BITMASK:
                     # Ptr found
-                    print("IS PTR!")
+                    # print("IS PTR!")
                     PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
                     # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
                     ptrOrigOffset = ((stdinBytes[answerSecOffset] & PTR_OFFSET_BITMASK) << 8) | stdinBytes[answerSecOffset+1]
-                    print(f"Ptr points to byte pos: {ptrOrigOffset}")
+                    # print(f"Ptr points to byte pos: {ptrOrigOffset}")
 
                     domainNameAnsw, _ = decodeDomainName(binHexStrToDecode=stdinBytes, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
                     
-                    PTR_GENERIC_OFFSET = 2      # bytes
+                    PTR_GENERIC_OFFSET = BYTE * 2
                     answerSecOffset += PTR_GENERIC_OFFSET
                 else:
                     # No ptr
                     print("NOO PTR")
-
-                    # FIXME: Adapt string to answer sec (MSc)
-                    # FIXME: Rename DnsMsgQuestion to make it generic (MSc)
-                    print(f";{domainNameAnsw: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <9}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
-                    print()
+                    raise NotImplementedError("Implement this for non-ptrs!!")
+                
+                ANS_TYPE_OFFSET = BYTE * 2
+                ansType = stdinBytes[answerSecOffset:answerSecOffset+ANS_TYPE_OFFSET]
+                answerSecOffset += ANS_TYPE_OFFSET
+                
+                ANS_CLASS_OFFSET = BYTE * 2
+                ansClass = stdinBytes[answerSecOffset:answerSecOffset+ANS_CLASS_OFFSET]
+                answerSecOffset += ANS_CLASS_OFFSET
+                
+                ANS_TTL_OFFSET = BYTE * 4
+                ansTTL = stdinBytes[answerSecOffset:answerSecOffset+ANS_TTL_OFFSET]
+                answerSecOffset += ANS_CLASS_OFFSET
+                
+                
+                IP = domainNameAnsw         # FIXME: Just a placeholder for now (MSc)
+                
+                # FIXME: Rename DnsMsgQuestion to make it generic (MSc)
+                print(f";{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQuestion.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{IP}")
+                print()
             
             
             
