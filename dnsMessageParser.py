@@ -8,7 +8,7 @@
 # RFC 2181 – Clarifications to the DNS Specification. (englisch).
 # RFC 2782 – A DNS RR for specifying the location of services (DNS SRV). (englisch).
 
-from ctypes import BigEndianStructure, c_uint16, sizeof
+from ctypes import BigEndianStructure, c_uint16, c_uint8, sizeof
 import ipaddress
 
 BYTE = 1
@@ -20,17 +20,17 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
     
     :param _fields_: Bit field definitions; must have same type to avoid padding (if `_pack_ = 1` is not used or not working); we must choose c_uint16 (no negative numbers; biggest field is 16 bit)
     """
-    
-    _fields_ = [                     # TODO: check if we can do something like: `("ID", c_uint8*2, 16)` and if we benefit from that (that might help reducing the data type sizes) (MSc)
+    _pack_ = 1
+    _fields_ = [
         ("ID", c_uint16, 16),        # Identifier assigned by the program that generates any kind of query
-        ("QR", c_uint16, 1),
-        ("OPCODE", c_uint16, 4),     # 0: standard query (QUERY), 1: inverse query (IQUERY), 2: server status request (STATUS), 3-15: reserved for future use
-        ("AA", c_uint16, 1),         # Authoritative Answer: NS is a authority for domain name in question
-        ("TC", c_uint16, 1),         # TrunCation (if is truncated due to length greather than permitted by transm. ch.)
-        ("RD", c_uint16, 1),         # Recursion Desired?
-        ("RA", c_uint16, 1),         # Recursion avail?
-        ("Z", c_uint16, 3),          # Always 0 (future use)
-        ("RCODE", c_uint16, 4),      # Response code (* error, no error, ...)
+        ("QR", c_uint8, 1),
+        ("OPCODE", c_uint8, 4),      # 0: standard query (QUERY), 1: inverse query (IQUERY), 2: server status request (STATUS), 3-15: reserved for future use
+        ("AA", c_uint8, 1),          # Authoritative Answer: NS is a authority for domain name in question
+        ("TC", c_uint8, 1),          # TrunCation (if is truncated due to length greather than permitted by transm. ch.)
+        ("RD", c_uint8, 1),          # Recursion Desired?
+        ("RA", c_uint8, 1),          # Recursion avail?
+        ("Z", c_uint8, 3),           # Always 0 (future use)
+        ("RCODE", c_uint8, 4),       # Response code (* error, no error, ...)
         ("QDCOUNT", c_uint16, 16),   # Num. of entries in question section
         ("ANCOUNT", c_uint16, 16),   # Num. of entries in answer section
         ("NSCOUNT", c_uint16, 16),   # Num. of NS resource records (RR) in auth. records section
@@ -195,21 +195,22 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         """
         @staticmethod
         def ipv4(inByteStream: bytes, offsetOrig: int, rdLength: int):
-            offset = offsetOrig
+            offsetLoc = offsetOrig
             ANS_IPv4_OFFSET = BYTE
             ips = []
             IPv4_PARTS = 4
             for ipv4part in range(0, IPv4_PARTS):
-                ips.append(inByteStream[offset:offset+ANS_IPv4_OFFSET])
-                offset += ANS_IPv4_OFFSET
+                ips.append(inByteStream[offsetLoc:offsetLoc+ANS_IPv4_OFFSET])
+                offsetLoc += ANS_IPv4_OFFSET
             ips = list(map(lambda ip: str(int.from_bytes(ip, 'big')), ips))
             ip = ".".join(ips)
             offset = IPv4_PARTS * ANS_IPv4_OFFSET
             
             # Sanity check
             if offset != rdLength:
-                raise ValueError(f"offset={offset} != rdLength={rdLength}! Input data may be invalid.")
-            return ip, offset+offsetOrig
+                msg = f"offset={offset} != rdLength={rdLength}! Input data may be invalid."
+                raise ValueError(msg)
+            return ip, offsetOrig+rdLength
             
         @staticmethod
         def ipv6(inByteStream: bytes, offsetOrig: int, rdLength: int):
@@ -238,19 +239,20 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             
             # Sanity check
             if offset != rdLength:
-                raise ValueError(f"offset={offset} != rdLength={rdLength}! Input data may be invalid.")
-            return ip, offset+offsetOrig
+                msg = f"offset={offset} != rdLength={rdLength}! Input data may be invalid."
+                raise ValueError(msg)
+            return ip, offsetOrig+rdLength
             
         @staticmethod
         def cname(inByteStream: bytes, offsetOrig: int, rdLength: int):
-            print("CANMEEEEEEEEEEE:", inByteStream[offsetOrig:])
-            offset = offsetOrig
-            cname, offset = decodeDomainName(binHexStrToDecode=inByteStream, offset=(offsetOrig+1))
+            cname, offsetTot = decodeDomainName(binHexStrToDecode=inByteStream, offset=offsetOrig)
+            offset = offsetTot - offsetOrig
             
             # Sanity check
             if offset != rdLength:
-                raise ValueError(f"offset={offset} != rdLength={rdLength}! Input data may be invalid.")
-            return cname, offset+offsetOrig
+                msg = f"offset={offset} != rdLength={rdLength}! Input data may be invalid."
+                raise ValueError(msg)
+            return cname, offsetOrig+rdLength
 
     
     _QTypeDispatchLUT = {
@@ -278,6 +280,77 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         
 
 
+def decodeDomainName_old(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
+    """
+    Decodes segments of a domain name to a string
+    
+    Parts are concatenated by `.`; a trailing dot is added for the NULL termination
+    Decoding works as <len_a><a><len_b><b> ... where len_a = 1 byte
+
+    @param binHexStrToDecode: Binary encoded hex string to decode
+    @param offset: Absolute byte offset (from very start of message) to start with for encoding
+    @return: Decoded string in the format `example.com.`, absolute offset pointing to end of decoded name
+    """
+    # TODO: Does not support pointers yet (MSc)
+    
+    def checkOffset(binHexStrToDecode: bytes, offset: int):
+        if offset >= len(binHexStrToDecode):
+            msg = f"Offset too big! ({offset} given, max by binHexStrToDecode is {len(binHexStrToDecode)-1})"
+            raise ValueError(msg)
+        if offset < 0:
+            raise ValueError("Offset too small (must be positive)!")
+    
+    checkOffset(binHexStrToDecode, offset)
+    
+    domainNameStrDecoded = ""
+    offsetNew = offset
+    
+    while True:
+        qname_len = binHexStrToDecode[offsetNew]
+        if qname_len == 0:
+            # Consider the null termination offset for ending in labels
+            offsetNew += 1
+            break
+        # Check name is a ptr
+        PTR_BITMASK = 0b11000000
+        PTR_FUTURE_BITMASK1 = 0b1000000
+        PTR_FUTURE_BITMASK2 = 0b0100000
+        PTR_GENERIC_OFFSET = BYTE * 2
+        # TODO: The ptr should be restricted to where it is allowed (only meaningful sections) to point (technically according to the RFC everywhere is valid but it's not a good idea to allow this) to and not anywhere in the data stream (MSc)
+        if binHexStrToDecode[offsetNew] == PTR_BITMASK:
+            # Ptr found
+            #print("PTR>>>")
+            PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
+            # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
+            ptrOrigOffset = ((binHexStrToDecode[offsetNew] & PTR_OFFSET_BITMASK) << 8) | binHexStrToDecode[offsetNew+1]
+            # print(f"Ptr points to byte pos: {ptrOrigOffset}")         # Debug print
+
+            domainNameStrDecoded, _ = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
+            
+            offsetNew += PTR_GENERIC_OFFSET
+            # v=== https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.4
+            # The compression scheme allows a domain name in a message to be
+            # represented as either:
+            # (1) a sequence of labels ending in a zero octet
+            # (2) a pointer
+            # (3) a sequence of labels ending with a pointer
+            break       # We must break here in case of (2) or (3)
+        elif (binHexStrToDecode[offsetNew] == PTR_FUTURE_BITMASK1) or (binHexStrToDecode[offsetNew] == PTR_FUTURE_BITMASK2):
+            offsetNew += PTR_GENERIC_OFFSET
+            raise NotImplementedError("0b1000000 and 0b0100000 prefixes are reserved for future use - not allowed!")
+        else:
+            offsetNew += 1
+            domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
+            # print(f"{offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
+            domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
+        
+            # Update offset by encoded QNAME portion length
+            offsetNew = offsetNew + qname_len
+
+    return domainNameStrDecoded, offsetNew
+
+
+
 def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
     """
     Decodes segments of a domain name to a string
@@ -293,7 +366,8 @@ def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
     
     def checkOffset(binHexStrToDecode: bytes, offset: int):
         if offset >= len(binHexStrToDecode):
-            raise ValueError(f"Offset too big! ({offset} given, max by binHexStrToDecode is {len(binHexStrToDecode)-1})")
+            msg = f"Offset too big! ({offset} given, max by binHexStrToDecode is {len(binHexStrToDecode)-1})"
+            raise ValueError(msg)
         if offset < 0:
             raise ValueError("Offset too small (must be positive)!")
     
@@ -301,21 +375,55 @@ def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
     
     domainNameStrDecoded = ""
     offsetNew = offset
+    
     while True:
         qname_len = binHexStrToDecode[offsetNew]
         if qname_len == 0:
-            # Consider the null termination offset
+            # Consider the null termination offset for ending in labels
             offsetNew += 1
+            # print("00000     FOUND ZERO OCTET")
             break
-        offsetNew += 1
-        print(f"LABEL: (decoding: `{binHexStrToDecode[offsetNew:offsetNew+qname_len]}`) - offset-orig: {offset} offset-new: {offsetNew}")
-        domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
-        # print(f"{offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
-        domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
+        # Check name is a ptr
+        PTR_BITMASK = 0b11000000
+        PTR_FUTURE_BITMASK1 = 0b1000000
+        PTR_FUTURE_BITMASK2 = 0b0100000
+        PTR_GENERIC_OFFSET = BYTE * 2
+        # TODO: The ptr should be restricted to where it is allowed (only meaningful sections) to point (technically according to the RFC everywhere is valid but it's not a good idea to allow this) to and not anywhere in the data stream (MSc)
+        if (binHexStrToDecode[offsetNew] & PTR_BITMASK) == PTR_BITMASK:
+            # Ptr found
+            PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
+            # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
+            ptrOrigOffset = ((binHexStrToDecode[offsetNew] & PTR_OFFSET_BITMASK) << 8) | binHexStrToDecode[offsetNew+1]
+            # print(f"Ptr points to byte pos: {ptrOrigOffset}")         # Debug print
         
-        # Update offset by encoded QNAME portion length
-        offsetNew = offsetNew + qname_len
-
+            # print(f">>Calling decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset={ptrOrigOffset}) (offset = {offsetNew})")
+            domainNamePart, _ = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
+            domainNameStrDecoded = domainNameStrDecoded + domainNamePart
+            
+            offsetNew += PTR_GENERIC_OFFSET
+            # print(f"<<Return domainNameAnsw with PTR:{domainNameStrDecoded} (offset = {offsetNew})")
+            # v=== https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.4
+            # The compression scheme allows a domain name in a message to be
+            # represented as either:
+            # (1) a sequence of labels ending in a zero octet
+            # (2) a pointer
+            # (3) a sequence of labels ending with a pointer
+            break       # We must break here in case of (2) or (3)
+        elif ((binHexStrToDecode[offsetNew] & PTR_FUTURE_BITMASK1) == PTR_FUTURE_BITMASK1) or ((binHexStrToDecode[offsetNew] & PTR_FUTURE_BITMASK2) == PTR_FUTURE_BITMASK2):
+            offsetNew += PTR_GENERIC_OFFSET
+            raise NotImplementedError("0b1000000 and 0b0100000 prefixes are reserved for future use - not allowed!")
+        else:
+            offsetNew += 1
+            domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
+            # print(f"LABEL: {offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
+            
+            # print(f":L: PRE:{domainNameStrDecoded}")
+            domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
+            # print(f":L: POST:{domainNameStrDecoded}")
+        
+            # Update offset by encoded QNAME portion length
+            offsetNew = offsetNew + qname_len
+        
     return domainNameStrDecoded, offsetNew
 
 
@@ -389,41 +497,7 @@ def main():
             answerSecOffset = questionSecsOffset
             # Per answer section
             for _ in range(header.ANCOUNT):
-                # TODO: The ptr should be restricted to where it is allowed (only meaningful sections) to point (technically according to the RFC everywhere is valid but it's not a good idea to allow this) to and not anywhere in the data stream (MSc)
-                # Check name is a ptr
-                PTR_BITMASK = 0b11000000
-                PTR_FUTURE_BITMASK1 = 0b1000000
-                PTR_FUTURE_BITMASK2 = 0b0100000
-                if (stdinBytes[answerSecOffset] & PTR_BITMASK) == PTR_BITMASK:
-                    # Ptr found
-                    PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
-                    # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
-                    ptrOrigOffset = ((stdinBytes[answerSecOffset] & PTR_OFFSET_BITMASK) << 8) | stdinBytes[answerSecOffset+1]
-                    # print(f"Ptr points to byte pos: {ptrOrigOffset}")         # Debug print
-                    
-                    print(f">>Calling decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset={ptrOrigOffset}) (offset = {answerSecOffset})")
-                    domainNameAnsw, _ = decodeDomainName(binHexStrToDecode=stdinBytes, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
-                    print(f"<<Return domainNameAnsw with PTR:{domainNameAnsw}")
-                    
-                    PTR_GENERIC_OFFSET = BYTE * 2
-                    answerSecOffset += PTR_GENERIC_OFFSET
-                elif ((stdinBytes[answerSecOffset] & PTR_FUTURE_BITMASK1) == PTR_FUTURE_BITMASK1) or ((stdinBytes[answerSecOffset] & PTR_FUTURE_BITMASK2) == PTR_FUTURE_BITMASK2):
-                    raise NotImplementedError("01 and 10 are reserved for future use - use not allowed!")
-                else:
-                    
-                    # FIXME: WHY DOES THIS WORK WITH PASS???????????????????????????
-                    pass
-                    # No ptr; use labels instead (label ends on zero octet)
-                    # We still use the ptr bitmask here since we just need to get rid of the first two bits which is how it is defined
-                    # PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK;
-                    # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
-                    # ptrOrigOffset = ((stdinBytes[answerSecOffset] & PTR_OFFSET_BITMASK) << 8) | stdinBytes[answerSecOffset+1]
-                    
-                    print(f"NO PTR: `{stdinBytes[answerSecOffset:answerSecOffset+25]}`")
-                    #answerSecOffset += 8
-                    domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=answerSecOffset)
-
-
+                domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=answerSecOffset)
 
                 ANS_TYPE_OFFSET = BYTE * 2
                 ansType = stdinBytes[answerSecOffset:answerSecOffset+ANS_TYPE_OFFSET]
@@ -443,10 +517,15 @@ def main():
                 rdLength = int.from_bytes(rdLength, 'big')
 
                 # RDATA processing
-                IP, answerSecOffset = DnsMsgQA.dispatchQTypeProc(DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')], DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')], stdinBytes, answerSecOffset, rdLength)
+                rdata, answerSecOffset = DnsMsgQA.dispatchQTypeProc(
+                    qtype=DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')],
+                    qclass=DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')],
+                    payload=stdinBytes,
+                    offset=answerSecOffset,
+                    rdLength=rdLength)
 
-                # print(f"{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{IP}")         # Decativated, target format uses tabs instead of spaces; keep it here for now
-                print(f"{domainNameAnsw}\t\t{int.from_bytes(ansTTL, 'big')}\t{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]}\t{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]}\t{IP}")
+                # print(f"{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{rdata}")         # Decativated, target format uses tabs instead of spaces; keep it here for now
+                print(f"{domainNameAnsw}\t\t{int.from_bytes(ansTTL, 'big')}\t{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]}\t{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]}\t{rdata}")
             
             
             
