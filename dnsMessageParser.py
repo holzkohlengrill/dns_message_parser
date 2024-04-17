@@ -2,7 +2,6 @@
 DNS Message Parser
 2024 Marcel Schmalzl
 """
-# Enter your code here. Read input from STDIN. Print output to STDOUT
 # RFCs:
 # * [Domain Names – Concepts and Facilities](https://datatracker.ietf.org/doc/html/rfc1035)
 # * [Domain Names – Implementation and Specification](https://datatracker.ietf.org/doc/html/rfc1034)
@@ -313,7 +312,6 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             qtype = binHexStrToDecode[questionSecsOffset:qtypeEndPos]
             qtype = int.from_bytes(qtype, 'big')
             questionSecsOffset += LEN_QTYPE
-            # print(f"qtype: `{qtype}` (= {DnsMsgQA.qtypeLUT[qtype})")         # Debug print
 
             # QCLASS
             LEN_QCLASS = 2  # bytes
@@ -321,7 +319,6 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             qclass = binHexStrToDecode[questionSecsOffset:qclassEndPos]
             qclass = int.from_bytes(qclass, 'big')
             questionSecsOffset += LEN_QCLASS
-            # print(f"qclass: `{qclass}` (= {DnsMsgQA.classLUT[qclass]})")         # Debug print
 
             # Add to data struct
             self.questionEntries.append(self.QuestionSec(qname=domainName, qclass=qclass, qtype=qtype))
@@ -425,7 +422,8 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             return qtypeProcessor(payload, offset, rdLength)
             # TODO: We could move the offset rdLength check as a generic sanity check here to make individual implementations easier (MSc)
         else:
-            print(f"QType {qtype} not implemented for processing yet!")
+            msg = f"QType {qtype} not implemented for processing yet!"
+            raise NotImplementedError(msg)
 
     class _RDataProcessor:
         """
@@ -540,7 +538,6 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             if qNameLen == 0:
                 # Consider the null termination offset for ending in labels
                 offsetNew += 1
-                # print("Found zero octet")         # Debug print
                 break
 
             # Check if is a ptr
@@ -554,7 +551,6 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
                 PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
                 # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
                 ptrOrigOffset = ((binHexStrToDecode[offsetNew] & PTR_OFFSET_BITMASK) << 8) | binHexStrToDecode[offsetNew+1]
-                # print(f"Ptr points to byte pos: {ptrOrigOffset}")         # Debug print
 
                 domainNamePart, _ = cls.decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
                 domainNameStrDecoded = domainNameStrDecoded + domainNamePart
@@ -573,7 +569,6 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             else:
                 offsetNew += 1
                 domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qNameLen]
-                # print(f"LABEL: {offsetNew}:{offsetNew+qNameLen} -> `{domainNamePart}`")         # Debug print
 
                 domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
 
