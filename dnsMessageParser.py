@@ -121,7 +121,7 @@ def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
 
     @param binHexStrToDecode: Binary encoded hex string to decode
     @param offset: Absolute byte offset (from very start of message) to start with for encoding
-    @return: Decoded string in the format `example.com.`, offset to point after decoded name
+    @return: Decoded string in the format `example.com.`, absolute offset pointing to end of decoded name
     """
     # TODO: Does not support yet pointers (MSc)
     
@@ -135,19 +135,28 @@ def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
     
     binHexStrToDecodeTruncated = binHexStrToDecode[offset:]
     domainNameStrDecoded = ""
+    offsetNew = offset
     while True:
-        qname_len = binHexStrToDecodeTruncated[0]
+        # qname_len_old = binHexStrToDecodeTruncated[0]
+        qname_len = binHexStrToDecode[offsetNew]
+        # print(f"qname_len_old: {qname_len_old}, qname_len: {qname_len}")
         if qname_len == 0:
-            # Truncate the null termination
-            binHexStrToDecodeTruncated = binHexStrToDecodeTruncated[1:]
+            # Consider the null termination offset
+            # binHexStrToDecodeTruncated = binHexStrToDecodeTruncated[1:]
+            offsetNew += 1
             break
-        domainNamePart = binHexStrToDecodeTruncated[1:1+qname_len]
+        # domainNamePart_old = binHexStrToDecodeTruncated[1:1+qname_len]
+        offsetNew += 1
+        domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
+        # print(f"domainNamePart_old: {domainNamePart_old}, domainNamePart: {domainNamePart} (off{offsetNew},len{qname_len})")
+        
         domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
         
         # Truncate binHexStrToDecodeTruncated by encoded QNAME portion
-        binHexStrToDecodeTruncated = binHexStrToDecodeTruncated[len(domainNamePart)+1:]
-    
-    offsetNew = len(binHexStrToDecode) - len(binHexStrToDecodeTruncated)
+        # binHexStrToDecodeTruncated = binHexStrToDecodeTruncated[len(domainNamePart)+1:]
+        offsetNew = offsetNew + qname_len
+
+    # offsetNew = len(binHexStrToDecode) - len(binHexStrToDecodeTruncated) #+ offset+1
     return domainNameStrDecoded, offsetNew
 
 
@@ -205,6 +214,7 @@ def main():
             questionSecsOffset += LEN_QCLASS
             # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]})")
         
+            print(f"questionSecsOffset: {questionSecsOffset}")
             print(f";{domainName: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <9}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
             print()
         
@@ -216,23 +226,23 @@ def main():
         HEADER_ANSWER = "ANSWER SECTION:"
         print(f"{COMMENT_PREFIX}{HEADER_ANSWER}")
         
-        
+        answerSecOffset = questionSecsOffset
         # Per answer section
         for _ in range(header.ANCOUNT):
-            answerBody = stdinBytes[questionSecsOffset:]
+            answerBody = stdinBytes[answerSecOffset:]
             if answerSec:
                 # Check name is a ptr
                 PTR_BITMASK = 0b11000000
-                if (answerBody[0] & PTR_BITMASK) == PTR_BITMASK:
+                if (stdinBytes[answerSecOffset] & PTR_BITMASK) == PTR_BITMASK:
                     # Ptr found
                     print("IS PTR!")
                     PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
                     # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
-                    ptrOrigOffset = ((answerBody[0] & PTR_OFFSET_BITMASK) << 8) | answerBody[1]
+                    ptrOrigOffset = ((stdinBytes[answerSecOffset] & PTR_OFFSET_BITMASK) << 8) | stdinBytes[answerSecOffset+1]
                     print(f"offset is: {ptrOrigOffset} bytes")
 
-                    domainNameAnsw, _ = decodeDomainName(binHexStrToDecode=stdinBytes, offset=12)
-                    
+                    domainNameAnsw, _ = decodeDomainName(binHexStrToDecode=stdinBytes, offset=ptrOrigOffset)
+                    print(f"newoffset: {_}, old: {answerSecOffset}")
                 # FIXME: Adapt string to answer sec (MSc)
                 # FIXME: Rename DnsMsgQuestion to make it generic (MSc)
                 print(f";{domainNameAnsw: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <9}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
