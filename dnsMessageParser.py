@@ -1,12 +1,12 @@
+"""
+DNS Message Parser
+2024 Marcel Schmalzl
+"""
 # Enter your code here. Read input from STDIN. Print output to STDOUT
 # RFCs:
 # * [Domain Names – Concepts and Facilities](https://datatracker.ietf.org/doc/html/rfc1035)
 # * [Domain Names – Implementation and Specification](https://datatracker.ietf.org/doc/html/rfc1034)
 # * [DNS Extensions to Support IP Version 6](https://datatracker.ietf.org/doc/html/rfc3596)
-
-
-# RFC 2181 – Clarifications to the DNS Specification. (english).
-# RFC 2782 – A DNS RR for specifying the location of services (DNS SRV). (english).
 
 from ctypes import BigEndianStructure, c_uint16, c_uint8, sizeof
 import ipaddress
@@ -19,10 +19,9 @@ BYTE = 1
 class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
     """
     DNS message header object
-
-    :param _fields_: Bit field definitions; must have same type to avoid padding (if `_pack_ = 1` is not used or not working); we must choose c_uint16 (no negative numbers; biggest field is 16 bit)
     """
     _pack_ = 1          # To avoid padding
+    # Bit field definitions; must have same type to avoid padding (or use `_pack_ = 1`); we must choose c_uint16 (no negative numbers; biggest field is 16 bit)
     _fields_ = [
         ("ID", c_uint16, 16),        # Identifier assigned by the program that generates any kind of query
         ("QR", c_uint8, 1),
@@ -39,7 +38,7 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
         ("ARCOUNT", c_uint16, 16),   # Num. of RR in add. records section
     ]
 
-    OpCodeLUT = {
+    opCodeLUT = {
         0: "QUERY",
         1: "IQUERY",
         2: "STATUS",
@@ -58,7 +57,7 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
         15: "RESERVED",
     }
 
-    RCodeLUT = {        # = status
+    rCodeLUT = {        # = status
         0: "NOERROR",
         1: "Format error",
         2: "Server failure",
@@ -99,10 +98,10 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
         self._sanityChecks()
 
     def questionSecExists(self) -> bool:
-        return True if self.fields.QDCOUNT > 0 else False
+        return self.fields.QDCOUNT > 0
 
     def answerSecExists(self) -> bool:
-        return True if self.fields.ANCOUNT > 0 else False
+        return self.fields.ANCOUNT > 0
 
     def print(self) -> None:
         """
@@ -119,15 +118,15 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
         :return: None
         """
         HEADER_PREFIX = "->>HEADER<<- "
-        print(f"{self.COMMENT_PREFIX}{HEADER_PREFIX}opcode: {self.OpCodeLUT.get(self.fields.OPCODE, 'INVALID')}, status: {self.RCodeLUT.get(self.fields.RCODE, 'INVALID')}, id: {self.fields.ID}")
+        print(f"{self.COMMENT_PREFIX}{HEADER_PREFIX}opcode: {self.opCodeLUT.get(self.fields.OPCODE, 'INVALID')}, status: {self.rCodeLUT.get(self.fields.RCODE, 'INVALID')}, id: {self.fields.ID}")
         concatedFlagStr = " ".join(
             filter(None, [
                 'qr' if self.fields.QR else None,
                 'rd' if self.fields.RD else None,
                 'ra' if self.fields.RA else None,
                 'aa' if self.fields.AA else None
-            ]
-                   )
+                ]
+            )
         )
         print(f"{self.COMMENT_PREFIX}flags: {concatedFlagStr}; QUERY: {self.fields.QDCOUNT}, ANSWER: {self.fields.ANCOUNT}, AUTHORITY: {self.fields.NSCOUNT}, ADDITIONAL: {self.fields.ARCOUNT}")
         print()
@@ -147,10 +146,10 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         Data struct for parsed question section data
         """
         qname: str          # = domain name
-        qclass: bytes
-        qtype: bytes
+        qclass: int
+        qtype: int
 
-    ClassLUT = {  # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.4
+    classLUT = {  # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.4
         1: "IN",
         2: "CS",
         3: "CH",
@@ -158,7 +157,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
     }
 
     # Qtype value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 & https://en.wikipedia.org/wiki/List_of_DNS_record_types & https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
-    QtypeLUT = {            # Source: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml (seems https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 is not sufficient)
+    qtypeLUT = {            # Source: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml (seems https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 is not sufficient)
         0: "Reserved",
         1: "A",
         2: "NS",
@@ -279,19 +278,19 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             self.ansType: int = self._unifyToInt(ansType)
             self.ansClass: int = self._unifyToInt(ansClass)
             self.ansTTL: int = self._unifyToInt(ansTTL)
-            self.rDLength: int = self._unifyToInt(rDLength)
+            self.rdLength: int = self._unifyToInt(rDLength)
             self.rData: str = rData
 
         def getClassLabel(self):
-            return DnsMsgQA.ClassLUT[self.ansClass]
+            return DnsMsgQA.classLUT.get(self.ansClass, 'INVALID')
 
         def getTypeLabel(self):
-            return DnsMsgQA.QtypeLUT[self.ansClass]
+            return DnsMsgQA.qtypeLUT.get(self.ansClass, 'INVALID')
 
     def __init__(self):
         super().__init__()
-        self.answerSecOffset = None
-        self.questionSecsOffset = None
+        self.answerSecOffset: int = 0
+        self.questionSecsOffset: int = 0
         self.questionEntries: list[DnsMsgQA.QuestionSec] = []
         self.answerEntries: list[DnsMsgQA.AnswerSec] = []
 
@@ -312,15 +311,17 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             LEN_QTYPE = 2  # bytes
             qtypeEndPos = questionSecsOffset + LEN_QTYPE
             qtype = binHexStrToDecode[questionSecsOffset:qtypeEndPos]
+            qtype = int.from_bytes(qtype, 'big')
             questionSecsOffset += LEN_QTYPE
-            # print(f"qtype: `{int.from_bytes(qtype, 'big')}` (= {DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]})")         # Debug print
+            # print(f"qtype: `{qtype}` (= {DnsMsgQA.qtypeLUT[qtype})")         # Debug print
 
             # QCLASS
             LEN_QCLASS = 2  # bytes
             qclassEndPos = questionSecsOffset + LEN_QCLASS
             qclass = binHexStrToDecode[questionSecsOffset:qclassEndPos]
+            qclass = int.from_bytes(qclass, 'big')
             questionSecsOffset += LEN_QCLASS
-            # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQA.ClassLUT[int.from_bytes(qclass, 'big')]})")         # Debug print
+            # print(f"qclass: `{qclass}` (= {DnsMsgQA.classLUT[qclass]})")         # Debug print
 
             # Add to data struct
             self.questionEntries.append(self.QuestionSec(qname=domainName, qclass=qclass, qtype=qtype))
@@ -358,8 +359,8 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
 
             # RDATA processing
             rData, answerSecOffset = DnsMsgQA.dispatchQTypeProc(
-                qtype=self.QtypeLUT[ansType],            # Manually do the look-up because we don't have all data yet to construct the object
-                qclass=self.ClassLUT[ansClass],          # Manually do the look-up because we don't have all data yet to construct the object
+                qtype=self.qtypeLUT.get(ansType, 'INVALID'),            # Manually do the look-up because we don't have all data yet to construct the object
+                qclass=self.classLUT.get(ansClass, 'INVALID'),          # Manually do the look-up because we don't have all data yet to construct the object
                 payload=binHexStrToDecode,
                 offset=answerSecOffset,
                 rdLength=rdLength
@@ -388,8 +389,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         HEADER_QUESTION = "QUESTION SECTION:"
         print(f"{self.COMMENT_PREFIX}{HEADER_QUESTION}")
         for qEntry in self.questionEntries:
-            print(
-                f";{qEntry.qname}\t\t{self.ClassLUT[int.from_bytes(qEntry.qclass, 'big')]}\t{self.QtypeLUT[int.from_bytes(qEntry.qtype, 'big')]}")
+            print(f";{qEntry.qname}\t\t{self.classLUT.get(qEntry.qclass, 'INVALID')}\t{self.qtypeLUT.get(qEntry.qtype, 'INVALID')}")
         print()
 
     def printAnswer(self):
@@ -407,7 +407,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         :return: None
         """
         for aEntry in self.answerEntries:
-            print(f"{aEntry.ansName}\t\t{aEntry.ansTTL}\t{DnsMsgQA.ClassLUT[aEntry.ansClass]}\t{DnsMsgQA.QtypeLUT[aEntry.ansType]}\t{aEntry.rData}")
+            print(f"{aEntry.ansName}\t\t{aEntry.ansTTL}\t{DnsMsgQA.classLUT.get(aEntry.ansClass, 'INVALID')}\t{DnsMsgQA.qtypeLUT.get(aEntry.ansType, 'INVALID')}\t{aEntry.rData}")
 
     @classmethod
     def dispatchQTypeProc(cls, qtype: str, qclass: str, payload: bytes, offset: int, rdLength: int) -> tuple[str, int]:
@@ -420,7 +420,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         :param rdLength: Length of RD section to decode
         :return: Extracted string from processing and offset after processing
         """
-        qtypeProcessor = cls._QTypeDispatchLUT.get(qtype, None)
+        qtypeProcessor = cls._qtypeDispatchLUT.get(qtype, 'INVALID')
         if qtypeProcessor is not None:
             return qtypeProcessor(payload, offset, rdLength)
             # TODO: We could move the offset rdLength check as a generic sanity check here to make individual implementations easier (MSc)
@@ -505,10 +505,9 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             return cname, offsetOrig+rdLength
 
     # LUT for processing function selection or RDATA sections
-    _QTypeDispatchLUT = {
+    _qtypeDispatchLUT = {
         "A": _RDataProcessor.ipv4,
         "AAAA": _RDataProcessor.ipv6,
-        # Must at least support all type A additional section processing i.e., name server (NS), location of services (SRV) and mail exchange (MX) queries
         "CNAME": _RDataProcessor.cname,
     }
 
@@ -524,8 +523,6 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         @param offset: Absolute byte offset (from very start of message) to start with for encoding
         @return: Decoded string in the format `example.com.`, absolute offset pointing to end of decoded name
         """
-        # TODO: Does not support pointers yet (MSc)
-
         def checkOffset(binHexStrToDecode: bytes, offset: int):
             if offset >= len(binHexStrToDecode):
                 msg = f"Offset too big! ({offset} given, max by binHexStrToDecode is {len(binHexStrToDecode)-1})"
@@ -539,8 +536,8 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         offsetNew = offset
 
         while True:
-            qname_len = binHexStrToDecode[offsetNew]
-            if qname_len == 0:
+            qNameLen = binHexStrToDecode[offsetNew]
+            if qNameLen == 0:
                 # Consider the null termination offset for ending in labels
                 offsetNew += 1
                 # print("Found zero octet")         # Debug print
@@ -575,13 +572,13 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
                 raise NotImplementedError("0b1000000 and 0b0100000 prefixes are reserved for future use - not allowed!")
             else:
                 offsetNew += 1
-                domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
-                # print(f"LABEL: {offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
+                domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qNameLen]
+                # print(f"LABEL: {offsetNew}:{offsetNew+qNameLen} -> `{domainNamePart}`")         # Debug print
 
                 domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
 
                 # Update offset by encoded QNAME portion length
-                offsetNew = offsetNew + qname_len
+                offsetNew = offsetNew + qNameLen
 
         return domainNameStrDecoded, offsetNew
 
