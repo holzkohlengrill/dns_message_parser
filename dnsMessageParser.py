@@ -6,7 +6,7 @@
 # RFC 2181 – Clarifications to the DNS Specification. (englisch).
 # RFC 2782 – A DNS RR for specifying the location of services (DNS SRV). (englisch).
 
-from ctypes import BigEndianStructure, c_uint16, c_uint8
+from ctypes import BigEndianStructure, c_uint16, c_uint8, sizeof
 
 
 class DnsMsgHeader2(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
@@ -74,8 +74,6 @@ class DnsMsgHeader2(BigEndianStructure):   # Network Byte order: Big Endian (htt
     }
 
 
-# TODO: add struct as LUT for field id to string translation (RCODE, OPCODE, ...)
-
 class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
     """
     DNS message header object
@@ -83,7 +81,7 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
     :param _fields_: Bit field definitions; must have same type to avoid padding (if `_pack_ = 1` is not used or not working); we must choose c_uint16 (no negative numbers; biggest field is 16 bit)
     """
     
-    _fields_ = [
+    _fields_ = [                     # TODO: check if we can do something like: `("ID", c_uint8*2, 16)` and if we benefit from that (that might help reducing the data type sizes)
         ("ID", c_uint16, 16),        # Identifier assigned by the program that generates any kind of query
         ("QR", c_uint16, 1),
         ("OPCODE", c_uint16, 4),     # 0: standard query (QUERY), 1: inverse query (IQUERY), 2: server status request (STATUS), 3-15: reserved for future use
@@ -146,7 +144,37 @@ class DnsMsgQuestion(BigEndianStructure):   # Network Byte order: Big Endian (ht
     
     :param _fields_: Bit field definitions; must have same type to avoid padding (if `_pack_ = 1` is not used or not working); we must choose c_uint16 (no negative numbers; biggest field is 16 bit)
     """
-    pass
+    QtypeLUT = {            # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2
+        # Type (= subset of QTYPE)
+        1: "A",
+        2: "NS",
+        3: "MD",
+        4: "MF",
+        5: "CNAME",
+        6: "SOA",
+        7: "MB",
+        8: "MG",
+        9: "MR",
+        10: "NULL",
+        11: "WKS",
+        12: "PTR",
+        13: "HINFO",
+        14: "MINFO",
+        15: "MX",
+        16: "TXT",
+        # QTYPE
+        252: "AXFR",
+        253: "MAILB",
+        254: "MAILA",
+        255: "*",
+    }
+    
+    ClassTypeLUT = {        # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.4
+        1: "IN",
+        2: "CS",
+        3: "CH",
+        4: "HS",
+    }
 
 
 # TODO: Create one DNS message object via multiple inheritance from header, question and answer
@@ -158,8 +186,11 @@ def main():
     stdinBytes = bytes.fromhex(stdin)
     # print(f"{stdinBytes}\n")
     
-    header = DnsMsgHeader.from_buffer_copy(stdinBytes)
-    
+    stdinBytes = bytes.fromhex(stdin)
+    headerBytes = stdinBytes[:sizeof(DnsMsgHeader)]
+    bodyBytes = stdinBytes[sizeof(DnsMsgHeader):]
+
+    header = DnsMsgHeader.from_buffer_copy(headerBytes)
     # TODO: move print to class method
     COMMENT_PREFIX = ";; "
     HEADER_PREFIX = "->>HEADER<<- "
@@ -176,14 +207,39 @@ def main():
     answerSec = True if header.ANCOUNT > 0 else False
     
     if questionSec:
-        # TODO: OR do it step by step: 0. truncate header from encoded string, loop(1. get len + truncate string, 2. get domain data, ...), ...
-        # https://docs.python.org/3/library/ctypes.html#ctypes.Structure._fields_
-        # DnsMsgQuestion._fields_ = [
-        #     ("QNAME_LEN", c_uint16, 8),
-        #     ("QNAME_", c_uint16, DnsMsgQuestion.QNAME_LEN),
-        # ]
-        
-        print(f";TODO")
+        # Per question section
+        for _ in range(header.QDCOUNT):
+            
+            # QNAME
+            domainName = ""
+            while True:
+                qname_len = bodyBytes[0]
+                if qname_len == 0:
+                    # Truncate the null termination
+                    bodyBytes = bodyBytes[1:]
+                    break
+                domainNamePart = bodyBytes[1:1+qname_len]
+                domainName = domainName + domainNamePart.decode() + "."
+                # print(f"domainNamePart:{domainNamePart}")
+                
+                # Truncate bodyBytes by QNAME portion
+                bodyBytes = bodyBytes[len(domainNamePart)+1:]
+            print(f"domainName: `{domainName}`")
+            
+            # QTYPE
+            LEN_QTYPE = 2       # bytes
+            qtype = bodyBytes[:LEN_QTYPE]
+            # Truncate bodyBytes by QTYPE portion
+            bodyBytes = bodyBytes[LEN_QTYPE:]
+            print(f"qtype: `{int.from_bytes(qtype, 'big')}` (= {DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]})")
+            
+            # QCLASS
+            LEN_QCLASS = 2      # bytes
+            qclass = bodyBytes[:LEN_QCLASS]
+            # Truncate bodyBytes by QCLASS portion
+            bodyBytes = bodyBytes[LEN_QCLASS:]
+            print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]})")
+
 
     HEADER_ANSWER = "ANSWER SECTION:"
     print(f"{COMMENT_PREFIX}{HEADER_ANSWER}")
