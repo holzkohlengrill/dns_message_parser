@@ -187,12 +187,17 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
     class _RDataProcessor:
         """
         Processing of RDATA types
-        All functions:
-        * Need to have inByteStream: bytes and offsetOrig: int as arguments
-        * return a tuple of the formatted string and the resulting offset after processing
+        All functions need:
+        :param inByteStream: [bytes] Input bytes stream to process
+        :param offsetOrig: [int] Offset used where to start processing in inByteStream
+        :param rdLength: [int] rdLength (sometimes used for processing; we usually check against "logical" length (calculated offset based on spec) as sanity check)
+        :return: [tuple[str, int]] processed string and resulting offset after processing
         """
         @staticmethod
         def ipv4(inByteStream: bytes, offsetOrig: int, rdLength: int) -> tuple[str, int]:
+            """
+            IPv4 processor
+            """
             offsetLoc = offsetOrig
             ANS_IPv4_OFFSET = BYTE
             ips = []
@@ -213,6 +218,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         @staticmethod
         def ipv6(inByteStream: bytes, offsetOrig: int, rdLength: int) -> tuple[str, int]:
             """
+            IPv6 processor
             Format and size: https://datatracker.ietf.org/doc/html/rfc3596#autoid-4
 
             The preferred form is x:x:x:x:x:x:x:x, where the 'x's are the
@@ -243,6 +249,9 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
 
         @staticmethod
         def cname(inByteStream: bytes, offsetOrig: int, rdLength: int) -> tuple[str, int]:
+            """
+            CNAME processor
+            """
             cname, offsetTot = decodeDomainName(binHexStrToDecode=inByteStream, offset=offsetOrig)
             offset = offsetTot - offsetOrig
 
@@ -252,6 +261,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
                 raise ValueError(msg)
             return cname, offsetOrig+rdLength
 
+    # LUT for processing function selection or RDATA sections
     _QTypeDispatchLUT = {
         "A": _RDataProcessor.ipv4,
         "AAAA": _RDataProcessor.ipv6,        # Must at least support all type A additional section processing i.e., name server (NS), location of services (SRV) and mail exchange (MX) queries
@@ -284,7 +294,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             print(f"QType {qtype} not implemented for processing yet!")
 
 
-def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
+def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> tuple[str, bytes]:
     """
     Decodes segments of a domain name to a string
 
