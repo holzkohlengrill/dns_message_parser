@@ -526,17 +526,6 @@ def main():
 
                 # print(f"{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{rdata}")         # Decativated, target format uses tabs instead of spaces; keep it here for now
                 print(f"{domainNameAnsw}\t\t{int.from_bytes(ansTTL, 'big')}\t{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]}\t{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]}\t{rdata}")
-            
-            
-            
-            
-            
-            
-            
-                # TODO: impelment for CNAME as well!!!!!!!!!!!!!!!!!!! (MSc)
-            
-            
-
 
 
 if __name__ == '__main__':
