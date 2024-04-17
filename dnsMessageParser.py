@@ -133,30 +133,22 @@ def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
     
     checkOffset(binHexStrToDecode, offset)
     
-    binHexStrToDecodeTruncated = binHexStrToDecode[offset:]
     domainNameStrDecoded = ""
     offsetNew = offset
     while True:
-        # qname_len_old = binHexStrToDecodeTruncated[0]
         qname_len = binHexStrToDecode[offsetNew]
-        # print(f"qname_len_old: {qname_len_old}, qname_len: {qname_len}")
         if qname_len == 0:
             # Consider the null termination offset
-            # binHexStrToDecodeTruncated = binHexStrToDecodeTruncated[1:]
             offsetNew += 1
             break
-        # domainNamePart_old = binHexStrToDecodeTruncated[1:1+qname_len]
         offsetNew += 1
         domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
-        # print(f"domainNamePart_old: {domainNamePart_old}, domainNamePart: {domainNamePart} (off{offsetNew},len{qname_len})")
         
         domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
         
-        # Truncate binHexStrToDecodeTruncated by encoded QNAME portion
-        # binHexStrToDecodeTruncated = binHexStrToDecodeTruncated[len(domainNamePart)+1:]
+        # Update offset by encoded QNAME portion length
         offsetNew = offsetNew + qname_len
 
-    # offsetNew = len(binHexStrToDecode) - len(binHexStrToDecodeTruncated) #+ offset+1
     return domainNameStrDecoded, offsetNew
 
 
@@ -223,14 +215,13 @@ def main():
         # Answer section processing
         # #############################
         # There must be an answer section only if there is a question section (therefore within question if)
-        HEADER_ANSWER = "ANSWER SECTION:"
-        print(f"{COMMENT_PREFIX}{HEADER_ANSWER}")
-        
-        answerSecOffset = questionSecsOffset
-        # Per answer section
-        for _ in range(header.ANCOUNT):
-            answerBody = stdinBytes[answerSecOffset:]
-            if answerSec:
+        if answerSec:                       # FIXME: Can propably removed since we assume an answer if there is a question (MSc)
+            HEADER_ANSWER = "ANSWER SECTION:"
+            print(f"{COMMENT_PREFIX}{HEADER_ANSWER}")
+            
+            answerSecOffset = questionSecsOffset
+            # Per answer section
+            for _ in range(header.ANCOUNT):
                 # Check name is a ptr
                 PTR_BITMASK = 0b11000000
                 if (stdinBytes[answerSecOffset] & PTR_BITMASK) == PTR_BITMASK:
@@ -239,14 +230,20 @@ def main():
                     PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
                     # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
                     ptrOrigOffset = ((stdinBytes[answerSecOffset] & PTR_OFFSET_BITMASK) << 8) | stdinBytes[answerSecOffset+1]
-                    print(f"offset is: {ptrOrigOffset} bytes")
+                    print(f"Ptr points to byte pos: {ptrOrigOffset}")
 
-                    domainNameAnsw, _ = decodeDomainName(binHexStrToDecode=stdinBytes, offset=ptrOrigOffset)
-                    print(f"newoffset: {_}, old: {answerSecOffset}")
-                # FIXME: Adapt string to answer sec (MSc)
-                # FIXME: Rename DnsMsgQuestion to make it generic (MSc)
-                print(f";{domainNameAnsw: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <9}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
-                print()
+                    domainNameAnsw, _ = decodeDomainName(binHexStrToDecode=stdinBytes, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
+                    
+                    PTR_GENERIC_OFFSET = 2      # bytes
+                    answerSecOffset += PTR_GENERIC_OFFSET
+                else:
+                    # No ptr
+                    print("NOO PTR")
+
+                    # FIXME: Adapt string to answer sec (MSc)
+                    # FIXME: Rename DnsMsgQuestion to make it generic (MSc)
+                    print(f";{domainNameAnsw: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <9}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
+                    print()
             
             
             
@@ -274,11 +271,6 @@ def main():
                     elif (stdinBytes[ptrOrigOffset] & PTR_BITMASK) == PTR_BITMASK:
                         # TODO: create a recursive call to check chained references (MSc)
                         pass
-                    
-                    
-            else:
-                # No ptr
-                print("NOO PTR")
 
 
 if __name__ == '__main__':
