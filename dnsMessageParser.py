@@ -20,7 +20,7 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
 
     :param _fields_: Bit field definitions; must have same type to avoid padding (if `_pack_ = 1` is not used or not working); we must choose c_uint16 (no negative numbers; biggest field is 16 bit)
     """
-    _pack_ = 1
+    _pack_ = 1          # To avoid padding
     _fields_ = [
         ("ID", c_uint16, 16),        # Identifier assigned by the program that generates any kind of query
         ("QR", c_uint8, 1),
@@ -75,15 +75,69 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
         15: "RESERVED",
     }
 
+    COMMENT_PREFIX = ";; "
 
-# TODO: Check whether we can we use the same class for question and answer? (-> same struct) (MSc)
+    def _sanityChecks(self) -> None:
+        """
+        Runs some sanity check on the input data stream
+        :return: None
+        """
+        if self.fields.Z != 0:
+            msg = f"The header Z value must always be zero but is: {self.fields.Z}"
+            raise ValueError(msg)
+
+    def __init__(self, inputHexBytes: bytes) -> None:
+        """
+        Initialises DNS header object
+        :param inputHexBytes: Input binary hex datastream
+        """
+        super().__init__()
+        self._headerBytes = inputHexBytes[:sizeof(DnsMsgHeader)]
+        self.fields = DnsMsgHeader.from_buffer_copy(self._headerBytes)
+        self._sanityChecks()
+
+    def questionSecExists(self) -> bool:
+        return True if self.fields.QDCOUNT > 0 else False
+
+    def answerSecExists(self) -> bool:
+        return True if self.fields.ANCOUNT > 0 else False
+
+    def print(self) -> None:
+        """
+        Print parsed header to stdout
+
+        Example:
+            Input binary hex stream: a01d81800001000100000000076578616d706c6503636f6d0000010001c00c0001000100001bbc00045db8d822
+            Prints:
+            ```
+            ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 40989
+            ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+
+            ```
+        :return: None
+        """
+        HEADER_PREFIX = "->>HEADER<<- "
+        print(f"{self.COMMENT_PREFIX}{HEADER_PREFIX}opcode: {self.OpCodeLUT.get(self.fields.OPCODE, 'INVALID')}, status: {self.RCodeLUT.get(self.fields.RCODE, 'INVALID')}, id: {self.fields.ID}")
+        concatedFlagStr = " ".join(
+            filter(None, [
+                'qr' if self.fields.QR else None,
+                'rd' if self.fields.RD else None,
+                'ra' if self.fields.RA else None,
+                'aa' if self.fields.AA else None
+            ]
+                   )
+        )
+        print(f"{self.COMMENT_PREFIX}flags: {concatedFlagStr}; QUERY: {self.fields.QDCOUNT}, ANSWER: {self.fields.ANCOUNT}, AUTHORITY: {self.fields.NSCOUNT}, ADDITIONAL: {self.fields.ARCOUNT}")
+        print()
+
+
 class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
     """
     DNS message question object
     We have this structure for each "question"/query -> QDCOUNT (usually 1)
     """
-    QtypeLUT = {            # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 & https://en.wikipedia.org/wiki/List_of_DNS_record_types & https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
-        # Source: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml (seems https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 is not sufficient)
+    # Qtype value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 & https://en.wikipedia.org/wiki/List_of_DNS_record_types & https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
+    QtypeLUT = {            # Source: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml (seems https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 is not sufficient)
         0: "Reserved",
         1: "A",
         2: "NS",
@@ -371,39 +425,23 @@ def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> tuple[str, in
 
 def main():
     stdin = input()
-
     stdinBytes = bytes.fromhex(stdin)
-    headerBytes = stdinBytes[:sizeof(DnsMsgHeader)]
 
-    # #############################
-    # Header processing
-    # #############################
-    header = DnsMsgHeader.from_buffer_copy(headerBytes)
-    # TODO: move print to class method (MSc)
+    header = DnsMsgHeader(stdinBytes)
+    header.print()
+
     COMMENT_PREFIX = ";; "
-
-    HEADER_PREFIX = "->>HEADER<<- "
-    print(f"{COMMENT_PREFIX}{HEADER_PREFIX}opcode: {DnsMsgHeader.OpCodeLUT.get(header.OPCODE, 'INVALID')}, status: {DnsMsgHeader.RCodeLUT.get(header.RCODE, 'INVALID')}, id: {header.ID}")      # TODO: Use cls (classmethod) instead of DnsMsgHeader (MSc)
-    concatedFlagStr = " ".join(filter(None, ['qr' if header.QR else None, 'rd' if header.RD else None, 'ra' if header.RA else None, 'aa' if header.AA else None]))       # TODO: move this to class method
-    print(f"{COMMENT_PREFIX}flags: {concatedFlagStr}; QUERY: {header.QDCOUNT}, ANSWER: {header.ANCOUNT}, AUTHORITY: {header.NSCOUNT}, ADDITIONAL: {header.ARCOUNT}")
-    print()
-
-    # TODO implement Z eval (must be always 0); though we could also ignore it (MSc)
-
-    # TODO: move this eval to class method (MSc)
-    questionSec = True if header.QDCOUNT > 0 else False
-    answerSec = True if header.ANCOUNT > 0 else False
 
     # #############################
     # Question section processing
     # #############################
-    if questionSec:
+    if header.questionSecExists():
         HEADER_QUESTION = "QUESTION SECTION:"
         print(f"{COMMENT_PREFIX}{HEADER_QUESTION}")
 
         questionSecsOffset = 0
         # Per question section
-        for _ in range(header.QDCOUNT):
+        for _ in range(header.fields.QDCOUNT):
             # QNAME = domain name
             domainName, questionSecsOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=sizeof(DnsMsgHeader))
 
@@ -429,13 +467,13 @@ def main():
         # Answer section processing
         # #############################
         # There must be an answer section only if there is a question section (therefore within question `if`)
-        if answerSec:                       # FIXME: Can probably removed since we assume an answer if there is a question (MSc)
+        if header.answerSecExists():                       # FIXME: Can probably removed since we assume an answer if there is a question (MSc)
             HEADER_ANSWER = "ANSWER SECTION:"
             print(f"{COMMENT_PREFIX}{HEADER_ANSWER}")
 
             answerSecOffset = questionSecsOffset
             # Per answer section
-            for _ in range(header.ANCOUNT):
+            for _ in range(header.fields.ANCOUNT):
                 domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=answerSecOffset)
 
                 ANS_TYPE_OFFSET = BYTE * 2
