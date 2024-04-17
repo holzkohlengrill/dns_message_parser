@@ -243,7 +243,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             
         @staticmethod
         def cname(inByteStream: bytes, offsetOrig: int, rdLength: int):
-            print("CANMEEEEEEEEEEE:", inByteStream[offsetOrig:])
+            print("CNAMEEEEEEEEEEE:", inByteStream[offsetOrig:])
             offset = offsetOrig
             cname, offset = decodeDomainName(binHexStrToDecode=inByteStream, offset=(offsetOrig+1))
             
@@ -301,19 +301,45 @@ def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
     
     domainNameStrDecoded = ""
     offsetNew = offset
+    
     while True:
         qname_len = binHexStrToDecode[offsetNew]
         if qname_len == 0:
             # Consider the null termination offset
             offsetNew += 1
             break
-        offsetNew += 1
-        domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
-        # print(f"{offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
-        domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
+        # Check name is a ptr
+        PTR_BITMASK = 0b11000000
+        PTR_FUTURE_BITMASK1 = 0b1000000
+        PTR_FUTURE_BITMASK2 = 0b0100000
+        PTR_GENERIC_OFFSET = BYTE * 2
+        if binHexStrToDecode[offsetNew] == PTR_BITMASK:
+            print(f"PTR (in:{bin(binHexStrToDecode[offsetNew])} == mask:{bin(PTR_BITMASK)}) - offset-orig: {offset} offset-new: {offsetNew}")
+            # Ptr found
+            PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
+            # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
+            ptrOrigOffset = ((binHexStrToDecode[offsetNew] & PTR_OFFSET_BITMASK) << 8) | binHexStrToDecode[offsetNew+1]
+            # print(f"Ptr points to byte pos: {ptrOrigOffset}")         # Debug print
+
+            print(f">>Calling decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset={ptrOrigOffset}) (offset = {offset})")
+            domainNameStrDecoded, _ = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
+            print(f"<<Return domainNameStrDecoded with PTR:{domainNameStrDecoded}")
+            
+            offsetNew += PTR_GENERIC_OFFSET
+        elif (binHexStrToDecode[offsetNew] == PTR_FUTURE_BITMASK1) or (binHexStrToDecode[offsetNew] == PTR_FUTURE_BITMASK2):
+            print(f"FUTURE: (in:{bin(binHexStrToDecode[offsetNew])} == mask:{bin(PTR_FUTURE_BITMASK1)} or {bin(PTR_FUTURE_BITMASK2)}) - offset-orig: {offset} offset-new: {offsetNew}")
+            offsetNew += PTR_GENERIC_OFFSET
+            raise NotImplementedError("01 and 10 are reserved for future use - use not allowed!")
+        else:
+            offsetNew += 1
+            print(f"LABEL: (decoding: `{binHexStrToDecode[offsetNew:offsetNew+qname_len]}`) - offset-orig: {offset} offset-new: {offsetNew}")
+            domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
+            # print(f"{offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
+            domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
+            print(f"domainNameStrDecoded:{domainNameStrDecoded}")
         
-        # Update offset by encoded QNAME portion length
-        offsetNew = offsetNew + qname_len
+            # Update offset by encoded QNAME portion length
+            offsetNew = offsetNew + qname_len
 
     return domainNameStrDecoded, offsetNew
 
@@ -390,10 +416,13 @@ def main():
             for _ in range(header.ANCOUNT):
                 # TODO: The ptr should be restricted to where it is allowed (only meaningful sections) to point (technically according to the RFC everywhere is valid but it's not a good idea to allow this) to and not anywhere in the data stream (MSc)
                 # Check name is a ptr
+                domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=answerSecOffset)
+                """
                 PTR_BITMASK = 0b11000000
                 PTR_FUTURE_BITMASK1 = 0b1000000
                 PTR_FUTURE_BITMASK2 = 0b0100000
                 if (stdinBytes[answerSecOffset] & PTR_BITMASK) == PTR_BITMASK:
+                    print(f"PTR (in:{bin(binHexStrToDecode[offsetNew])} == mask:{bin(PTR_BITMASK)}) - offset-orig: {offset} offset-new: {offsetNew}")
                     # Ptr found
                     PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
                     # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
@@ -419,8 +448,7 @@ def main():
                     print(f"NO PTR: `{stdinBytes[answerSecOffset:answerSecOffset+25]}`")
                     #answerSecOffset += 8
                     domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=answerSecOffset)
-
-
+                """
 
                 ANS_TYPE_OFFSET = BYTE * 2
                 ansType = stdinBytes[answerSecOffset:answerSecOffset+ANS_TYPE_OFFSET]
