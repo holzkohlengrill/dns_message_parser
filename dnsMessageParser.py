@@ -2,6 +2,8 @@
 # RFCs:
 # * [Domain Names – Concepts and Facilities](https://datatracker.ietf.org/doc/html/rfc1035)
 # * [Domain Names – Implementation and Specification](https://datatracker.ietf.org/doc/html/rfc1034)
+# * [DNS Extensions to Support IP Version 6](https://datatracker.ietf.org/doc/html/rfc3596)
+
 
 # RFC 2181 – Clarifications to the DNS Specification. (englisch).
 # RFC 2782 – A DNS RR for specifying the location of services (DNS SRV). (englisch).
@@ -82,8 +84,9 @@ class DnsMsgQuestion(BigEndianStructure):   # Network Byte order: Big Endian (ht
     
     :param _fields_: Bit field definitions; must have same type to avoid padding (if `_pack_ = 1` is not used or not working); we must choose c_uint16 (no negative numbers; biggest field is 16 bit)
     """
-    QtypeLUT = {            # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2
-        # Type (= subset of QTYPE)
+    QtypeLUT = {            # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 & https://en.wikipedia.org/wiki/List_of_DNS_record_types & https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
+        # Source: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml (seems https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 is not sufficient)
+        0: "Reserved",
         1: "A",
         2: "NS",
         3: "MD",
@@ -100,11 +103,87 @@ class DnsMsgQuestion(BigEndianStructure):   # Network Byte order: Big Endian (ht
         14: "MINFO",
         15: "MX",
         16: "TXT",
-        # QTYPE
+        17: "RP",
+        18: "AFSDB",
+        19: "X25",
+        20: "ISDN",
+        21: "RT",
+        22: "NSAP",
+        23: "NSAP-PTR",
+        24: "SIG",
+        25: "KEY",
+        26: "PX",
+        27: "GPOS",
+        28: "AAAA",
+        29: "LOC",
+        30: "NXT",
+        31: "EID",
+        32: "NIMLOC",
+        33: "SRV",
+        34: "ATMA",
+        35: "NAPTR",
+        36: "KX",
+        37: "CERT",
+        38: "A6",
+        39: "DNAME",
+        40: "SINK",
+        41: "OPT",
+        42: "APL",
+        43: "DS",
+        44: "SSHFP",
+        45: "IPSECKEY",
+        46: "RRSIG",
+        47: "NSEC",
+        48: "DNSKEY",
+        49: "DHCID",
+        50: "NSEC3",
+        51: "NSEC3PARAM",
+        52: "TLSA",
+        53: "SMIMEA",
+        54: "Unassigned",
+        55: "HIP",
+        56: "NINFO",
+        57: "RKEY",
+        58: "TALINK",
+        59: "CDS",
+        60: "CDNSKEY",
+        61: "OPENPGPKEY",
+        62: "CSYNC",
+        63: "ZONEMD",
+        64: "SVCB",
+        65: "HTTPS",
+        # 66-98: "Unassigned",
+        99: "SPF",
+        100: "UINFO",
+        101: "UID",
+        102: "GID",
+        103: "UNSPEC",
+        104: "NID",
+        105: "L32",
+        106: "L64",
+        107: "LP",
+        108: "EUI48",
+        109: "EUI64",
+        # 110-248: "Unassigned",
+        249: "TKEY",
+        250: "TSIG",
+        251: "IXFR",
         252: "AXFR",
         253: "MAILB",
         254: "MAILA",
         255: "*",
+        256: "URI",
+        257: "CAA",
+        258: "AVC",
+        259: "DOA",
+        260: "AMTRELAY",
+        261: "RESINFO",
+        # 262-32767: "Unassigned",
+        32768: "TA",
+        32769: "DLV",
+        # 32770-65279: "Unassigned",
+        # 65280-65534: "Private use",
+        65535: "Reserved",
     }
     
     ClassTypeLUT = {        # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.4
@@ -172,7 +251,7 @@ def main():
     
     HEADER_PREFIX = "->>HEADER<<- "
     print(f"{COMMENT_PREFIX}{HEADER_PREFIX}opcode: {DnsMsgHeader.OpCodeLUT.get(header.OPCODE, 'INVALID')}, status: {DnsMsgHeader.RCodeLUT.get(header.RCODE, 'INVALID')}, id: {header.ID}")      # TODO: Use cls (classmethod) instead of DnsMsgHeader (MSc)
-    concatedFlagStr = " ".join(['qr' if header.QR else '', 'rd' if header.RD else '', 'ra' if header.RA else ''])       # TODO: move this to class method
+    concatedFlagStr = " ".join(filter(None, ['qr' if header.QR else None, 'rd' if header.RD else None, 'ra' if header.RA else None, 'aa' if header.AA else None]))       # TODO: move this to class method
     print(f"{COMMENT_PREFIX}flags: {concatedFlagStr}; QUERY: {header.QDCOUNT}, ANSWER: {header.ANCOUNT}, AUTHORITY: {header.NSCOUNT}, ADDITIONAL: {header.ARCOUNT}")
     print()
     
@@ -209,8 +288,8 @@ def main():
             questionSecsOffset += LEN_QCLASS
             # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]})")
         
-            print(f"questionSecsOffset: {questionSecsOffset}")
-            print(f";{domainName: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <7}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
+            # print(f";{domainName: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <7}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
+            print(f";{domainName}\t\t{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]}\t{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
             print()
         
                 
@@ -254,14 +333,30 @@ def main():
                 
                 ANS_TTL_OFFSET = BYTE * 4
                 ansTTL = stdinBytes[answerSecOffset:answerSecOffset+ANS_TTL_OFFSET]
-                answerSecOffset += ANS_CLASS_OFFSET
+                answerSecOffset += ANS_TTL_OFFSET
                 
+                ANS_RDLENGTH_OFFSET = BYTE * 2
+                rdLength = stdinBytes[answerSecOffset:answerSecOffset+ANS_RDLENGTH_OFFSET]
+                answerSecOffset += ANS_RDLENGTH_OFFSET
+                a = int.from_bytes(rdLength, 'big')
                 
-                IP = domainNameAnsw         # FIXME: Just a placeholder for now (MSc)
+                IP = stdinBytes[answerSecOffset:answerSecOffset+a]
+                
+                ANS_IPv4_OFFSET = BYTE
+                IP1 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
+                answerSecOffset += ANS_IPv4_OFFSET
+                IP2 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
+                answerSecOffset += ANS_IPv4_OFFSET
+                IP3 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
+                answerSecOffset += ANS_IPv4_OFFSET
+                IP4 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
+                answerSecOffset += ANS_IPv4_OFFSET
+                ips = list(map(lambda ip: str(int.from_bytes(ip, 'big')), [IP1, IP2, IP3, IP4]))
+                IP = ".".join(ips)
                 
                 # FIXME: Rename DnsMsgQuestion to make it generic (MSc)
-                print(f";{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQuestion.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{IP}")
-                print()
+                # print(f"{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQuestion.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{IP}")
+                print(f"{domainNameAnsw}\t\t{int.from_bytes(ansTTL, 'big')}\t{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(ansClass, 'big')]}\t{DnsMsgQuestion.QtypeLUT[int.from_bytes(ansType, 'big')]}\t{IP}")
             
             
             
