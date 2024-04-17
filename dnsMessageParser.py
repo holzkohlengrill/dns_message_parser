@@ -15,7 +15,7 @@ from dataclasses import dataclass
 BYTE = 1
 
 
-class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
+class DnsMsgHeader(BigEndianStructure):   # Network byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
     """
     DNS message header object
     """
