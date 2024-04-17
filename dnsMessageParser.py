@@ -10,6 +10,8 @@
 
 from ctypes import BigEndianStructure, c_uint16, c_uint8, sizeof
 import ipaddress
+from dataclasses import dataclass
+
 
 BYTE = 1
 
@@ -104,7 +106,7 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
 
     def print(self) -> None:
         """
-        Print parsed header to stdout
+        Print the parsed header to stdout
 
         Example:
             Input binary hex stream: a01d81800001000100000000076578616d706c6503636f6d0000010001c00c0001000100001bbc00045db8d822
@@ -136,6 +138,25 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
     DNS message question object
     We have this structure for each "question"/query -> QDCOUNT (usually 1)
     """
+
+    COMMENT_PREFIX = ";; "
+
+    @dataclass
+    class QuestionSec:
+        """
+        Data struct for parsed question section data
+        """
+        qname: str          # = domain name
+        qclass: bytes
+        qtype: bytes
+
+    ClassLUT = {  # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.4
+        1: "IN",
+        2: "CS",
+        3: "CH",
+        4: "HS",
+    }
+
     # Qtype value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 & https://en.wikipedia.org/wiki/List_of_DNS_record_types & https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
     QtypeLUT = {            # Source: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml (seems https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2 is not sufficient)
         0: "Reserved",
@@ -238,10 +259,178 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         65535: "Reserved",
     }
 
+    class AnswerSec:
+        """
+        Data struct for parsed answer section data
+        """
+        @staticmethod
+        def _unifyToInt(numToUnify: int | bytes) -> int:
+            if type(numToUnify) is int:
+                convertedNumToInt: int = numToUnify
+            elif type(numToUnify) is bytes:
+                convertedNumToInt: int = int.from_bytes(numToUnify, 'big')
+            else:
+                msg = f"Unsupported input type (must be int or bytes; got: `{type(numToUnify)}`)!"
+                raise TypeError(msg)
+            return convertedNumToInt
+
+        def __init__(self, ansName: str, ansType: int | bytes, ansClass: int | bytes, ansTTL: int, rDLength: int | bytes, rData: str):
+            self.ansName: str = ansName
+            self.ansType: int = self._unifyToInt(ansType)
+            self.ansClass: int = self._unifyToInt(ansClass)
+            self.ansTTL: int = self._unifyToInt(ansTTL)
+            self.rDLength: int = self._unifyToInt(rDLength)
+            self.rData: str = rData
+
+        def getClassLabel(self):
+            return DnsMsgQA.ClassLUT[self.ansClass]
+
+        def getTypeLabel(self):
+            return DnsMsgQA.QtypeLUT[self.ansClass]
+
+    def __init__(self):
+        super().__init__()
+        self.answerSecOffset = None
+        self.questionSecsOffset = None
+        self.questionEntries: list[DnsMsgQA.QuestionSec] = []
+        self.answerEntries: list[DnsMsgQA.AnswerSec] = []
+
+    def parseQuestion(self, header: DnsMsgHeader, binHexStrToDecode: bytes) -> int:
+        """
+        Parse the DNS question section and stores the individual values
+        :param header: Header input object (needed for processing)
+        :param binHexStrToDecode:
+        :return:
+        """
+        questionSecsOffset = 0
+        # Per question section
+        for _ in range(header.fields.QDCOUNT):
+            # QNAME = domain name
+            domainName, questionSecsOffset = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=sizeof(DnsMsgHeader))
+
+            # QTYPE
+            LEN_QTYPE = 2  # bytes
+            qtypeEndPos = questionSecsOffset + LEN_QTYPE
+            qtype = binHexStrToDecode[questionSecsOffset:qtypeEndPos]
+            questionSecsOffset += LEN_QTYPE
+            # print(f"qtype: `{int.from_bytes(qtype, 'big')}` (= {DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]})")         # Debug print
+
+            # QCLASS
+            LEN_QCLASS = 2  # bytes
+            qclassEndPos = questionSecsOffset + LEN_QCLASS
+            qclass = binHexStrToDecode[questionSecsOffset:qclassEndPos]
+            questionSecsOffset += LEN_QCLASS
+            # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQA.ClassLUT[int.from_bytes(qclass, 'big')]})")         # Debug print
+
+            # Add to data struct
+            self.questionEntries.append(self.QuestionSec(qname=domainName, qclass=qclass, qtype=qtype))
+        self.questionSecsOffset = questionSecsOffset
+        return questionSecsOffset
+
+    def parseAnswer(self, header: DnsMsgHeader, binHexStrToDecode: bytes) -> int:
+        HEADER_ANSWER = "ANSWER SECTION:"
+        print(f"{self.COMMENT_PREFIX}{HEADER_ANSWER}")
+
+        answerSecOffset = self.questionSecsOffset
+        # Per answer section
+        for _ in range(header.fields.ANCOUNT):
+            domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=answerSecOffset)
+
+            ANS_TYPE_OFFSET = BYTE * 2
+            ansType = binHexStrToDecode[answerSecOffset:answerSecOffset + ANS_TYPE_OFFSET]
+            ansType = int.from_bytes(ansType, 'big')
+            answerSecOffset += ANS_TYPE_OFFSET
+
+            ANS_CLASS_OFFSET = BYTE * 2
+            ansClass = binHexStrToDecode[answerSecOffset:answerSecOffset + ANS_CLASS_OFFSET]
+            ansClass = int.from_bytes(ansClass, 'big')
+            answerSecOffset += ANS_CLASS_OFFSET
+
+            ANS_TTL_OFFSET = BYTE * 4
+            ansTTL = binHexStrToDecode[answerSecOffset:answerSecOffset + ANS_TTL_OFFSET]
+            ansTTL = int.from_bytes(ansTTL, 'big')
+            answerSecOffset += ANS_TTL_OFFSET
+
+            ANS_RDLENGTH_OFFSET = BYTE * 2
+            rdLength = binHexStrToDecode[answerSecOffset:answerSecOffset + ANS_RDLENGTH_OFFSET]
+            answerSecOffset += ANS_RDLENGTH_OFFSET
+            rdLength = int.from_bytes(rdLength, 'big')
+
+            # RDATA processing
+            rData, answerSecOffset = DnsMsgQA.dispatchQTypeProc(
+                qtype=self.QtypeLUT[ansType],            # Manually do the look-up because we don't have all data yet to construct the object
+                qclass=self.ClassLUT[ansClass],          # Manually do the look-up because we don't have all data yet to construct the object
+                payload=binHexStrToDecode,
+                offset=answerSecOffset,
+                rdLength=rdLength
+            )
+
+            # Add to data struct
+            self.answerEntries.append(self.AnswerSec(ansName=domainNameAnsw, ansType=ansType, ansClass=ansClass, ansTTL=ansTTL, rDLength=rdLength, rData=rData))
+
+        self.answerSecOffset = answerSecOffset
+        return answerSecOffset
+
+    def printQuestion(self):
+        """
+        Print the parsed question section to stdout
+
+        Example:
+            Input binary hex stream: a01d81800001000100000000076578616d706c6503636f6d0000010001c00c0001000100001bbc00045db8d822
+            Prints:
+            ```
+            ;; QUESTION SECTION:
+            ;example.com.		IN	A
+
+            ```
+        :return: None
+        """
+        HEADER_QUESTION = "QUESTION SECTION:"
+        print(f"{self.COMMENT_PREFIX}{HEADER_QUESTION}")
+        for qEntry in self.questionEntries:
+            print(
+                f";{qEntry.qname}\t\t{self.ClassLUT[int.from_bytes(qEntry.qclass, 'big')]}\t{self.QtypeLUT[int.from_bytes(qEntry.qtype, 'big')]}")
+        print()
+
+    def printAnswer(self):
+        """
+        Print the parsed answer section to stdout
+
+        Example:
+            Input binary hex stream: a01d81800001000100000000076578616d706c6503636f6d0000010001c00c0001000100001bbc00045db8d822
+            Prints:
+            ```
+            ;; ANSWER SECTION:
+            example.com.		7100	IN	A	93.184.216.34
+
+            ```
+        :return: None
+        """
+        for aEntry in self.answerEntries:
+            print(f"{aEntry.ansName}\t\t{aEntry.ansTTL}\t{DnsMsgQA.ClassLUT[aEntry.ansClass]}\t{DnsMsgQA.QtypeLUT[aEntry.ansType]}\t{aEntry.rData}")
+
+    @classmethod
+    def dispatchQTypeProc(cls, qtype: str, qclass: str, payload: bytes, offset: int, rdLength: int) -> tuple[str, int]:
+        """
+        Dispatches to the correct processing function based on qtype and qclass
+        :param qtype: DNS message qtype to decide on matching processor via LUT
+        :param qclass: DNS message qclass to decide on matching processor via LUT (not yet used for decision-making)
+        :param payload: Full message bytes string to decode
+        :param offset: Start offset for decoding
+        :param rdLength: Length of RD section to decode
+        :return: Extracted string from processing and offset after processing
+        """
+        qtypeProcessor = cls._QTypeDispatchLUT.get(qtype, None)
+        if qtypeProcessor is not None:
+            return qtypeProcessor(payload, offset, rdLength)
+            # TODO: We could move the offset rdLength check as a generic sanity check here to make individual implementations easier (MSc)
+        else:
+            print(f"QType {qtype} not implemented for processing yet!")
+
     class _RDataProcessor:
         """
         Processing of RDATA types
-        All functions need:
+        All functions need a:
         :param inByteStream: [bytes] Input bytes stream to process
         :param offsetOrig: [int] Offset used where to start processing in inByteStream
         :param rdLength: [int] rdLength (sometimes used for processing; we usually check against "logical" length (calculated offset based on spec) as sanity check)
@@ -318,34 +507,10 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
     # LUT for processing function selection or RDATA sections
     _QTypeDispatchLUT = {
         "A": _RDataProcessor.ipv4,
-        "AAAA": _RDataProcessor.ipv6,        # Must at least support all type A additional section processing i.e., name server (NS), location of services (SRV) and mail exchange (MX) queries
+        "AAAA": _RDataProcessor.ipv6,
+        # Must at least support all type A additional section processing i.e., name server (NS), location of services (SRV) and mail exchange (MX) queries
         "CNAME": _RDataProcessor.cname,
     }
-
-    ClassTypeLUT = {        # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.4
-        1: "IN",
-        2: "CS",
-        3: "CH",
-        4: "HS",
-    }
-
-    @classmethod
-    def dispatchQTypeProc(cls, qtype: str, qclass: str, payload: bytes, offset: int, rdLength: int) -> tuple[str, int]:
-        """
-        Dispatches to the correct processing function based on qtype and qclass
-        :param qtype: DNS message qtype to decide on matching processor via LUT
-        :param qclass: DNS message qclass to decide on matching processor via LUT (not yet used for decision-making)
-        :param payload: Full message bytes string to decode
-        :param offset: Start offset for decoding
-        :param rdLength: Length of RD section to decode
-        :return: Extracted string from processing and offset after processing
-        """
-        qtypeProcessor = cls._QTypeDispatchLUT.get(qtype, None)
-        if qtypeProcessor is not None:
-            return qtypeProcessor(payload, offset, rdLength)
-            # TODO: We could move the offset rdLength check as a generic sanity check here to make individual implementations easier (MSc)
-        else:
-            print(f"QType {qtype} not implemented for processing yet!")
 
 
 def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> tuple[str, int]:
@@ -430,79 +595,15 @@ def main():
     header = DnsMsgHeader(stdinBytes)
     header.print()
 
-    COMMENT_PREFIX = ";; "
-
-    # #############################
-    # Question section processing
-    # #############################
     if header.questionSecExists():
-        HEADER_QUESTION = "QUESTION SECTION:"
-        print(f"{COMMENT_PREFIX}{HEADER_QUESTION}")
+        qaObj = DnsMsgQA()
+        qaObj.parseQuestion(header, stdinBytes)
+        qaObj.printQuestion()
 
-        questionSecsOffset = 0
-        # Per question section
-        for _ in range(header.fields.QDCOUNT):
-            # QNAME = domain name
-            domainName, questionSecsOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=sizeof(DnsMsgHeader))
-
-            # QTYPE
-            LEN_QTYPE = 2       # bytes
-            qtypeEndPos = questionSecsOffset+LEN_QTYPE
-            qtype = stdinBytes[questionSecsOffset:qtypeEndPos]
-            questionSecsOffset += LEN_QTYPE
-            # print(f"qtype: `{int.from_bytes(qtype, 'big')}` (= {DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]})")         # Debug print
-
-            # QCLASS
-            LEN_QCLASS = 2      # bytes
-            qclassEndPos = questionSecsOffset+LEN_QCLASS
-            qclass = stdinBytes[questionSecsOffset:qclassEndPos]
-            questionSecsOffset += LEN_QCLASS
-            # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQA.ClassTypeLUT[int.from_bytes(qclass, 'big')]})")         # Debug print
-
-            # print(f";{domainName: <24}{DnsMsgQA.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <7}{DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]}")         # Deactivated, target format uses tabs instead of spaces; keep it here for now
-            print(f";{domainName}\t\t{DnsMsgQA.ClassTypeLUT[int.from_bytes(qclass, 'big')]}\t{DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]}")
-            print()
-
-        # #############################
-        # Answer section processing
-        # #############################
         # There must be an answer section only if there is a question section (therefore within question `if`)
         if header.answerSecExists():                       # FIXME: Can probably removed since we assume an answer if there is a question (MSc)
-            HEADER_ANSWER = "ANSWER SECTION:"
-            print(f"{COMMENT_PREFIX}{HEADER_ANSWER}")
-
-            answerSecOffset = questionSecsOffset
-            # Per answer section
-            for _ in range(header.fields.ANCOUNT):
-                domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=stdinBytes, offset=answerSecOffset)
-
-                ANS_TYPE_OFFSET = BYTE * 2
-                ansType = stdinBytes[answerSecOffset:answerSecOffset+ANS_TYPE_OFFSET]
-                answerSecOffset += ANS_TYPE_OFFSET
-
-                ANS_CLASS_OFFSET = BYTE * 2
-                ansClass = stdinBytes[answerSecOffset:answerSecOffset+ANS_CLASS_OFFSET]
-                answerSecOffset += ANS_CLASS_OFFSET
-
-                ANS_TTL_OFFSET = BYTE * 4
-                ansTTL = stdinBytes[answerSecOffset:answerSecOffset+ANS_TTL_OFFSET]
-                answerSecOffset += ANS_TTL_OFFSET
-
-                ANS_RDLENGTH_OFFSET = BYTE * 2
-                rdLength = stdinBytes[answerSecOffset:answerSecOffset+ANS_RDLENGTH_OFFSET]
-                answerSecOffset += ANS_RDLENGTH_OFFSET
-                rdLength = int.from_bytes(rdLength, 'big')
-
-                # RDATA processing
-                rdata, answerSecOffset = DnsMsgQA.dispatchQTypeProc(
-                    qtype=DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')],
-                    qclass=DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')],
-                    payload=stdinBytes,
-                    offset=answerSecOffset,
-                    rdLength=rdLength)
-
-                # print(f"{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{rdata}")         # Deactivated, target format uses tabs instead of spaces; keep it here for now
-                print(f"{domainNameAnsw}\t\t{int.from_bytes(ansTTL, 'big')}\t{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]}\t{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]}\t{rdata}")
+            qaObj.parseAnswer(header, stdinBytes)
+            qaObj.printAnswer()
 
 
 if __name__ == '__main__':
