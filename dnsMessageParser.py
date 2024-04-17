@@ -9,7 +9,7 @@
 # RFC 2782 – A DNS RR for specifying the location of services (DNS SRV). (englisch).
 
 from ctypes import BigEndianStructure, c_uint16, sizeof
-
+import ipaddress
 
 BYTE = 1
 
@@ -77,7 +77,7 @@ class DnsMsgHeader(BigEndianStructure):   # Network Byte order: Big Endian (http
 
 
 # TODO: Check whether we can we use the same class for question and answer? (-> same struct) (MSc)
-class DnsMsgQuestion(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
+class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://twu.seanho.com/09spr/cmpt166/lectures/29-dns.pdf, slide 7)
     """
     DNS message question object
     We have this structure for each "question"/query -> QDCOUNT (usually 1)
@@ -186,12 +186,75 @@ class DnsMsgQuestion(BigEndianStructure):   # Network Byte order: Big Endian (ht
         65535: "Reserved",
     }
     
+    class _RDataProcessor:
+        """
+        Processing of RDATA types
+        All functions:
+        * Need to have inByteStream: bytes and offsetOrig: int as arguments
+        * return a tuple of the formatted string and the resulting offset after processing
+        """
+        @staticmethod
+        def ipv4(inByteStream: bytes, offsetOrig: int):
+            offset = offsetOrig
+            ANS_IPv4_OFFSET = BYTE
+            ips = []
+            IPv4_PARTS = 4
+            for ipv4part in range(0, IPv4_PARTS):
+                ips.append(inByteStream[offset:offset+ANS_IPv4_OFFSET])
+                offset += ANS_IPv4_OFFSET
+            ips = list(map(lambda ip: str(int.from_bytes(ip, 'big')), ips))
+            ip = ".".join(ips)
+            offset = IPv4_PARTS * ANS_IPv4_OFFSET
+            return ip, offset
+            
+        @staticmethod
+        def ipv6(inByteStream:bytes , offsetOrig: int):         # https://datatracker.ietf.org/doc/html/rfc3596#autoid-4
+            # TODO: Add zero compression as defined in sec 2 in: https://datatracker.ietf.org/doc/html/rfc3513#section-2.2
+            """
+            The preferred form is x:x:x:x:x:x:x:x, where the 'x's are the
+            hexadecimal values of the eight 16-bit pieces of the address.
+
+            Examples:
+
+            FEDC:BA98:7654:3210:FEDC:BA98:7654:3210
+
+            1080:0:0:0:8:800:200C:417A
+            """
+            offset = offsetOrig
+            ANS_IPv6_OFFSET = BYTE*2
+            ips = []
+            IPv6_PARTS = 8
+            for ipv4part in range(0, IPv6_PARTS):
+                partHex = inByteStream[offset:offset+ANS_IPv6_OFFSET].hex()
+                ips.append(partHex if partHex != bytes(b'\x00\x00') else None)
+                offset += ANS_IPv6_OFFSET
+            ips = list(map(lambda ip: str(ip), filter(None, ips)))
+            ip = ":".join(ips)
+            ip = ipaddress.ip_address(ip).compressed
+            offset = IPv6_PARTS * ANS_IPv6_OFFSET
+            return ip, offset
+    
+    _QTypeDispatchLUT = {
+        "A": _RDataProcessor.ipv4,
+        "AAAA": _RDataProcessor.ipv6        # Must at least support all type A additional section processing i.e., name server (NS), location of services (SRV) and mail exchange (MX) queries
+    }
+    
     ClassTypeLUT = {        # Value description: https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.4
         1: "IN",
         2: "CS",
         3: "CH",
         4: "HS",
     }
+    
+    @classmethod
+    def dispatchQTypeProc(cls, qtype: str, qclass: str, payload: bytes, offset: int):
+        qtypeProcessor = cls._QTypeDispatchLUT.get(qtype, None)
+        if qtypeProcessor is not None:
+            return qtypeProcessor(payload, offset)
+        else:
+            print(f"QType {qtype} not implemented for processing yet!")
+        
+        
 
 
 def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> (str, bytes):
@@ -279,17 +342,17 @@ def main():
             qtypeEndPos = questionSecsOffset+LEN_QTYPE
             qtype = stdinBytes[questionSecsOffset:qtypeEndPos]
             questionSecsOffset += LEN_QTYPE
-            # print(f"qtype: `{int.from_bytes(qtype, 'big')}` (= {DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]})")
+            # print(f"qtype: `{int.from_bytes(qtype, 'big')}` (= {DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]})")
             
             # QCLASS
             LEN_QCLASS = 2      # bytes
             qclassEndPos = questionSecsOffset+LEN_QCLASS
             qclass = stdinBytes[questionSecsOffset:qclassEndPos]
             questionSecsOffset += LEN_QCLASS
-            # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]})")
+            # print(f"qclass: `{int.from_bytes(qclass, 'big')}` (= {DnsMsgQA.ClassTypeLUT[int.from_bytes(qclass, 'big')]})")
         
-            # print(f";{domainName: <24}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <7}{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
-            print(f";{domainName}\t\t{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(qclass, 'big')]}\t{DnsMsgQuestion.QtypeLUT[int.from_bytes(qtype, 'big')]}")
+            # print(f";{domainName: <24}{DnsMsgQA.ClassTypeLUT[int.from_bytes(qclass, 'big')]: <7}{DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]}")
+            print(f";{domainName}\t\t{DnsMsgQA.ClassTypeLUT[int.from_bytes(qclass, 'big')]}\t{DnsMsgQA.QtypeLUT[int.from_bytes(qtype, 'big')]}")
             print()
         
                 
@@ -338,25 +401,15 @@ def main():
                 ANS_RDLENGTH_OFFSET = BYTE * 2
                 rdLength = stdinBytes[answerSecOffset:answerSecOffset+ANS_RDLENGTH_OFFSET]
                 answerSecOffset += ANS_RDLENGTH_OFFSET
-                a = int.from_bytes(rdLength, 'big')
+                # a = int.from_bytes(rdLength, 'big')
+                # FIXME: Check if we need the rdLength field for now (MSc)
                 
-                IP = stdinBytes[answerSecOffset:answerSecOffset+a]
+                # IP = stdinBytes[answerSecOffset:answerSecOffset+a]
+                IP, answerSecOffset = DnsMsgQA.dispatchQTypeProc(DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')], DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')], stdinBytes, answerSecOffset)
                 
-                ANS_IPv4_OFFSET = BYTE
-                IP1 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
-                answerSecOffset += ANS_IPv4_OFFSET
-                IP2 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
-                answerSecOffset += ANS_IPv4_OFFSET
-                IP3 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
-                answerSecOffset += ANS_IPv4_OFFSET
-                IP4 = stdinBytes[answerSecOffset:answerSecOffset+ANS_IPv4_OFFSET]
-                answerSecOffset += ANS_IPv4_OFFSET
-                ips = list(map(lambda ip: str(int.from_bytes(ip, 'big')), [IP1, IP2, IP3, IP4]))
-                IP = ".".join(ips)
-                
-                # FIXME: Rename DnsMsgQuestion to make it generic (MSc)
-                # print(f"{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQuestion.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{IP}")
-                print(f"{domainNameAnsw}\t\t{int.from_bytes(ansTTL, 'big')}\t{DnsMsgQuestion.ClassTypeLUT[int.from_bytes(ansClass, 'big')]}\t{DnsMsgQuestion.QtypeLUT[int.from_bytes(ansType, 'big')]}\t{IP}")
+                # FIXME: Rename DnsMsgQA to make it generic (MSc)
+                # print(f"{domainNameAnsw: <24}{int.from_bytes(ansTTL, 'big'): <7}{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]: <8}{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]: <8}{IP}")
+                print(f"{domainNameAnsw}\t\t{int.from_bytes(ansTTL, 'big')}\t{DnsMsgQA.ClassTypeLUT[int.from_bytes(ansClass, 'big')]}\t{DnsMsgQA.QtypeLUT[int.from_bytes(ansType, 'big')]}\t{IP}")
             
             
             
