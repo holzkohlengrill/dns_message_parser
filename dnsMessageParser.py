@@ -294,7 +294,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             print(f"QType {qtype} not implemented for processing yet!")
 
 
-def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> tuple[str, bytes]:
+def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> tuple[str, int]:
     """
     Decodes segments of a domain name to a string
 
