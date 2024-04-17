@@ -306,7 +306,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         # Per question section
         for _ in range(header.fields.QDCOUNT):
             # QNAME = domain name
-            domainName, questionSecsOffset = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=sizeof(DnsMsgHeader))
+            domainName, questionSecsOffset = self.decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=sizeof(DnsMsgHeader))
 
             # QTYPE
             LEN_QTYPE = 2  # bytes
@@ -334,7 +334,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         answerSecOffset = self.questionSecsOffset
         # Per answer section
         for _ in range(header.fields.ANCOUNT):
-            domainNameAnsw, answerSecOffset = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=answerSecOffset)
+            domainNameAnsw, answerSecOffset = self.decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=answerSecOffset)
 
             ANS_TYPE_OFFSET = BYTE * 2
             ansType = binHexStrToDecode[answerSecOffset:answerSecOffset + ANS_TYPE_OFFSET]
@@ -495,7 +495,7 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
             """
             CNAME processor
             """
-            cname, offsetTot = decodeDomainName(binHexStrToDecode=inByteStream, offset=offsetOrig)
+            cname, offsetTot = DnsMsgQA.decodeDomainName(binHexStrToDecode=inByteStream, offset=offsetOrig)
             offset = offsetTot - offsetOrig
 
             # Sanity check
@@ -512,81 +512,79 @@ class DnsMsgQA(BigEndianStructure):   # Network Byte order: Big Endian (https://
         "CNAME": _RDataProcessor.cname,
     }
 
+    @classmethod
+    def decodeDomainName(cls, binHexStrToDecode: bytes, offset: int = 0) -> tuple[str, int]:
+        """
+        Decodes segments of a domain name to a string
 
-def decodeDomainName(binHexStrToDecode: bytes, offset: int = 0) -> tuple[str, int]:
-    """
-    Decodes segments of a domain name to a string
+        Parts are concatenated by `.`; a trailing dot is added for the NULL termination
+        Decoding works as <len_a><a><len_b><b> ... where len_a = 1 byte
 
-    Parts are concatenated by `.`; a trailing dot is added for the NULL termination
-    Decoding works as <len_a><a><len_b><b> ... where len_a = 1 byte
+        @param binHexStrToDecode: Binary encoded hex string to decode
+        @param offset: Absolute byte offset (from very start of message) to start with for encoding
+        @return: Decoded string in the format `example.com.`, absolute offset pointing to end of decoded name
+        """
+        # TODO: Does not support pointers yet (MSc)
 
-    @param binHexStrToDecode: Binary encoded hex string to decode
-    @param offset: Absolute byte offset (from very start of message) to start with for encoding
-    @return: Decoded string in the format `example.com.`, absolute offset pointing to end of decoded name
-    """
-    # TODO: Does not support pointers yet (MSc)
+        def checkOffset(binHexStrToDecode: bytes, offset: int):
+            if offset >= len(binHexStrToDecode):
+                msg = f"Offset too big! ({offset} given, max by binHexStrToDecode is {len(binHexStrToDecode)-1})"
+                raise ValueError(msg)
+            if offset < 0:
+                raise ValueError("Offset too small (must be positive)!")
 
-    def checkOffset(binHexStrToDecode: bytes, offset: int):
-        if offset >= len(binHexStrToDecode):
-            msg = f"Offset too big! ({offset} given, max by binHexStrToDecode is {len(binHexStrToDecode)-1})"
-            raise ValueError(msg)
-        if offset < 0:
-            raise ValueError("Offset too small (must be positive)!")
+        checkOffset(binHexStrToDecode, offset)
 
-    checkOffset(binHexStrToDecode, offset)
+        domainNameStrDecoded = ""
+        offsetNew = offset
 
-    domainNameStrDecoded = ""
-    offsetNew = offset
+        while True:
+            qname_len = binHexStrToDecode[offsetNew]
+            if qname_len == 0:
+                # Consider the null termination offset for ending in labels
+                offsetNew += 1
+                # print("Found zero octet")         # Debug print
+                break
 
-    while True:
-        qname_len = binHexStrToDecode[offsetNew]
-        if qname_len == 0:
-            # Consider the null termination offset for ending in labels
-            offsetNew += 1
-            # print("Found zero octet")         # Debug print
-            break
+            # Check if is a ptr
+            PTR_BITMASK = 0b11000000
+            PTR_FUTURE_BITMASK1 = 0b1000000
+            PTR_FUTURE_BITMASK2 = 0b0100000
+            PTR_GENERIC_OFFSET = BYTE * 2
+            # TODO: The ptr should be restricted to where it is allowed (only meaningful sections) to point (technically according to the RFC everywhere is valid but it's not a good idea to allow this) to and not anywhere in the data stream (MSc)
+            if (binHexStrToDecode[offsetNew] & PTR_BITMASK) == PTR_BITMASK:
+                # Ptr found
+                PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
+                # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
+                ptrOrigOffset = ((binHexStrToDecode[offsetNew] & PTR_OFFSET_BITMASK) << 8) | binHexStrToDecode[offsetNew+1]
+                # print(f"Ptr points to byte pos: {ptrOrigOffset}")         # Debug print
 
-        # Check if is a ptr
-        PTR_BITMASK = 0b11000000
-        PTR_FUTURE_BITMASK1 = 0b1000000
-        PTR_FUTURE_BITMASK2 = 0b0100000
-        PTR_GENERIC_OFFSET = BYTE * 2
-        # TODO: The ptr should be restricted to where it is allowed (only meaningful sections) to point (technically according to the RFC everywhere is valid but it's not a good idea to allow this) to and not anywhere in the data stream (MSc)
-        if (binHexStrToDecode[offsetNew] & PTR_BITMASK) == PTR_BITMASK:
-            # Ptr found
-            PTR_OFFSET_BITMASK = 0b11111111 - PTR_BITMASK       # Inversion of PTR_BITMASK
-            # (1.) Mask ptr bits away and (2.) move to the left (by 8 bits) so that we can (3.) add the remaining bits (6 out of 14) in and can eval the full 14 bits as a number -> offset
-            ptrOrigOffset = ((binHexStrToDecode[offsetNew] & PTR_OFFSET_BITMASK) << 8) | binHexStrToDecode[offsetNew+1]
-            # print(f"Ptr points to byte pos: {ptrOrigOffset}")         # Debug print
+                domainNamePart, _ = cls.decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
+                domainNameStrDecoded = domainNameStrDecoded + domainNamePart
 
-            domainNamePart, _ = decodeDomainName(binHexStrToDecode=binHexStrToDecode, offset=ptrOrigOffset)    # Since we decode a pointer we must not use the returned offset!
-            domainNameStrDecoded = domainNameStrDecoded + domainNamePart
+                offsetNew += PTR_GENERIC_OFFSET
+                # v=== https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.4
+                # The compression scheme allows a domain name in a message to be
+                # represented as either:
+                # (1) a sequence of labels ending in a zero octet
+                # (2) a pointer
+                # (3) a sequence of labels ending with a pointer
+                break       # We must break here in case of (2) or (3)
+            elif ((binHexStrToDecode[offsetNew] & PTR_FUTURE_BITMASK1) == PTR_FUTURE_BITMASK1) or ((binHexStrToDecode[offsetNew] & PTR_FUTURE_BITMASK2) == PTR_FUTURE_BITMASK2):
+                offsetNew += PTR_GENERIC_OFFSET
+                raise NotImplementedError("0b1000000 and 0b0100000 prefixes are reserved for future use - not allowed!")
+            else:
+                offsetNew += 1
+                domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
+                # print(f"LABEL: {offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
 
-            offsetNew += PTR_GENERIC_OFFSET
-            # v=== https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.4
-            # The compression scheme allows a domain name in a message to be
-            # represented as either:
-            # (1) a sequence of labels ending in a zero octet
-            # (2) a pointer
-            # (3) a sequence of labels ending with a pointer
-            break       # We must break here in case of (2) or (3)
-        elif ((binHexStrToDecode[offsetNew] & PTR_FUTURE_BITMASK1) == PTR_FUTURE_BITMASK1) or ((binHexStrToDecode[offsetNew] & PTR_FUTURE_BITMASK2) == PTR_FUTURE_BITMASK2):
-            offsetNew += PTR_GENERIC_OFFSET
-            raise NotImplementedError("0b1000000 and 0b0100000 prefixes are reserved for future use - not allowed!")
-        else:
-            offsetNew += 1
-            domainNamePart = binHexStrToDecode[offsetNew:offsetNew+qname_len]
-            # print(f"LABEL: {offsetNew}:{offsetNew+qname_len} -> `{domainNamePart}`")         # Debug print
+                domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
 
-            domainNameStrDecoded = domainNameStrDecoded + domainNamePart.decode() + "."
+                # Update offset by encoded QNAME portion length
+                offsetNew = offsetNew + qname_len
 
-            # Update offset by encoded QNAME portion length
-            offsetNew = offsetNew + qname_len
+        return domainNameStrDecoded, offsetNew
 
-    return domainNameStrDecoded, offsetNew
-
-
-# TODO: Create one DNS message object via multiple inheritance from header, question and answer (MSc)
 
 def main():
     stdin = input()
