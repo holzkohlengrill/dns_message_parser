@@ -15,6 +15,11 @@ example.com.            7100    IN      A       93.184.216.34
 
 The tool returns similar (but less) output to [`dig`](https://linux.die.net/man/1/dig).
 
+
+# Extension
+In order to add more implementations for Resource Records (QType) add the relevant functions to the `_RDataProcessor` class and link it in the LUT `_qtypeDispatchLUT` (LUT for processing function dispatch).
+
+
 # Based on RFCs:
 * [Domain Names – Concepts and Facilities](https://datatracker.ietf.org/doc/html/rfc1035)
 * [Domain Names – Implementation and Specification](https://datatracker.ietf.org/doc/html/rfc1034)
