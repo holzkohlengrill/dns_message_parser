@@ -1,7 +1,7 @@
 # DNS message parser
 (Partial) Python 3 implementation of a DNS message parser (supports A, AAAA and CNAME record types (qtypes) and IPv4/IPv6)
 
-It prompts the user for an input (=binary hex stream; like: `a01d81800001000100000000076578616d706c6503636f6d0000010001c00c0001000100001bbc00045db8d822`) and would print in the following format:
+It prompts the user for an input (= binary hex stream; like: `a01d81800001000100000000076578616d706c6503636f6d0000010001c00c0001000100001bbc00045db8d822`) and would print in the following format:
 ```
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 40989
 ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
